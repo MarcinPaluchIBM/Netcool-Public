@@ -1,0 +1,103 @@
+DataType = "NOIA_AD_All_NOI_Users_and_Groups";
+GroupsFilter = "objectClass=group";
+CountOnly = false;
+ValidUsers = "";
+ValidGroups = "";
+ 
+All_NOI_Groups = GetByFilter(DataType, GroupsFilter, CountOnly);
+i=0;
+while (i<length(All_NOI_Groups)) {
+    ValidGroups = ValidGroups + ",'"+All_NOI_Groups[i].name+"'";
+ 
+    LDAPObject = NewObject();
+    LDAPObject.name = All_NOI_Groups[i].name;
+    LDAPObject.dn = All_NOI_Groups[i].distinguishedName;
+    LDAPObject.mail = All_NOI_Groups[i].mail;
+    LDAPObject.members = All_NOI_Groups[i].member;
+    LDAPObject.userPrincipalName = All_NOI_Groups[i].userPrincipalName;
+    i = i + 1;
+   
+    groupResultSet = DirectSQL("defaultobjectserver","select * from security.groups where GroupName like '"+LDAPObject.name+"'",false);
+    groupExists = length(groupResultSet);
+    if(groupExists==0) {
+        DirectSQL("defaultobjectserver","create group '"+LDAPObject.name+"' comment 'dn: "+LDAPObject.dn+", mail: "+LDAPObject.mail+", principal: "+LDAPObject.userPrincipalName+"'",false);
+        DirectSQL("defaultobjectserver","grant role 'ISQL' to group '"+LDAPObject.name+"'",false);
+        DirectSQL("defaultobjectserver","grant role 'ISQLWrite' to group '"+LDAPObject.name+"'",false);
+        log("Just added group: "+LDAPObject.name);
+       
+        // TO DO
+        // 1) Add roles in DASH/WebGUI
+        // 2) Add roles in Impact
+        // 2) Add roles in IOALA
+        // Current workaround: add roles manually in DASH/WebGUI, Impact and IOALA
+       
+    }
+   
+    // Preserving the group name for later
+    groupname = LDAPObject.name;
+    // Standardizing the member field is always an array
+    membersArr = {};
+    membersArr = membersArr + LDAPObject.members;
+   
+    j = 0;
+    while (j<length(membersArr)) {
+ 
+        userFilter = "distinguishedName="+membersArr[j];
+        groupMembers = GetByFilter(DataType, userFilter, CountOnly);
+       
+        j = j + 1;
+       
+        k = 0;
+        while (k<length(groupMembers)) {
+            ValidUsers = ValidUsers + ",'"+groupMembers[k].name+"'";            
+           
+            LDAPObject = NewObject();
+            LDAPObject.name = groupMembers[k].name;
+            LDAPObject.dn = groupMembers[k].distinguishedName;
+            LDAPObject.mail = groupMembers[k].mail;
+            k = k + 1;
+           
+            userResultSet = DirectSQL("defaultobjectserver","select * from security.users where UserName like '"+LDAPObject.name+"'",false);
+            userExists = length(userResultSet);
+            if(userExists==0) {
+                DirectSQL("defaultobjectserver","create user '"+LDAPObject.name+"' full name '"+LDAPObject.dn+" ("+LDAPObject.mail+")' PAM true;",false);
+                log("Just added user: "+LDAPObject.name);
+                DirectSQL("defaultobjectserver","alter group '"+groupname+"' assign members '"+LDAPObject.name+"'",false);
+                log("Just made user "+LDAPObject.name+ " member of "+groupname);
+               
+            }          
+        }
+    }   
+}
+ 
+ 
+// Removing users which aren't part of NOI groups anymore
+ 
+ValidUsers = substring(ValidUsers,1,length(ValidUsers));
+if(length(ValidUsers)>0) {
+ 
+    InvalidUsers = DirectSQL("defaultobjectserver","select UserName from security.users where FullName like 'DC=acme,DC=net' and UserName not in ("+ValidUsers+")",false);
+    i = 0;
+    while(i<length(InvalidUsers)) {
+        ResultSet = DirectSQL("defaultobjectserver","drop user '"+InvalidUsers[i].UserName+"'", false);
+        log("Just deleted no longer valid user "+InvalidUsers[i].UserName);
+        i = i + 1;
+    }
+}
+ 
+ 
+// Removing groups which aren't part of NOI anymore
+ 
+ValidGroups= substring(ValidGroups,1,length(ValidGroups));
+ 
+if(length(ValidGroups)>0) {
+    cmd = "select GroupName from security.groups where Description like 'DC=acme,DC=com' and GroupName not in ("+ValidGroups+")";
+    //log(cmd);
+    InvalidGroups = DirectSQL("defaultobjectserver",cmd,false);
+    i = 0;
+    while(i<length(InvalidGroups)) {
+        ResultSet = DirectSQL("defaultobjectserver","drop group '"+InvalidGroups[i].GroupName+"'", false);
+        log("Just deleted no longer valid group "+InvalidGroups[i].GroupName);
+        i = i + 1;
+    }
+}
